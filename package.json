@@ -1,0 +1,46 @@
+{
+  "name": "airdcpp-sfv-folder-checker",
+  "version": "1.2.15-beta",
+  "description": "Hub command /sfvcheck <folder> that recursively checks a folder for .sfv files and compares their CRC32 against the real files on disk. Works together with airdcpp-release-fixxer.",
+  "main": "dist/main.js",
+  "license": "MIT",
+  "private": false,
+  "author": {
+    "name": "ShareFixxers"
+  },
+  "keywords": [
+    "airdcpp",
+    "airdcpp-extensions",
+    "airdcpp-extensions-public"
+  ],
+  "bugs": "https://github.com/sharefixxers/airdcpp-sfv-folder-checker/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sharefixxers/airdcpp-sfv-folder-checker.git",
+    "directory": "airdcpp-sfv-folder-checker"
+  },
+  "scripts": {
+    "build": "webpack",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "airdcpp-extension": "^1.5.1",
+    "airdcpp-extension-settings": "^1.2.1"
+  },
+  "devDependencies": {
+    "webpack": "^5.94.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "airdcpp": {
+    "apiVersion": 1,
+    "minApiFeatureLevel": 0
+  },
+  "allowScripts": {
+    "bufferutil@4.1.0": true,
+    "es5-ext@0.10.64": true,
+    "utf-8-validate@5.0.10": true
+  }
+}
