@@ -1,4 +1,4 @@
-# airdcpp-sfv-folder-checker (1.2.12-beta):
+# airdcpp-sfv-folder-checker
 
 Hub command /sfvcheck <folder> that recursively checks a folder for .sfv
 files and compares their CRC32 against the real files on disk. Works
