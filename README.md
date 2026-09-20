@@ -41,7 +41,3 @@ Settings:
 
 ## What is new in each version
 [Changelog](https://github.com/sharefixxers/airdcpp-sfv-folder-checker/blob/master/CHANGELOG.md)
-
-## Troubleshooting
-Enable extension debug mode from application settings and check the extension error logs
-`(Settings\Extensions\airdcpp-sfv-folder-checker\logs)` for additional information.
