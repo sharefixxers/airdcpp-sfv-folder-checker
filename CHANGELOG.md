@@ -1,3 +1,117 @@
+## Notes (1.0.0)
+
+No longer beta: version reset to 1.0.0 to mark the extension stable,
+following semantic versioning convention (the 0.x/`-beta` range signals
+"may still change", 1.0.0 signals a settled, stable feature set). No
+functional change on its own.
+
+Also fixed, found during a last settings-screen check before this version
+bump: the "(0 = no limit)"/"(0 = never)" qualifier at the end of a long
+setting title (`max_auto_delete_count`, `max_auto_delete_percent`,
+`report_max_age_days`) could get cut off or overlap the input field next
+to it in the client's Settings screen. Moved to the start of each
+setting's help text instead, which always renders on its own line.
+
+## Notes (1.2.21-beta)
+
+Editorial pass over the Settings screen text (reviewed together, several
+rounds back and forth): shortened several titles, standardized "CRC
+mismatch" to "CRC error" in the four settings that mention it
+(`delete_mismatches`, `max_auto_delete_count`, `max_auto_delete_percent`,
+`redownload_on_delete` -- kept as the shorter word by choice, this is
+distinct from the file-not-readable case those settings never covered),
+fixed two grammar mistakes introduced during that pass (a missing "of" in
+`max_auto_delete_percent`'s title, "be redownload" -> "be redownloaded" in
+`delete_unparseable_sfv`), and trimmed the help text on
+`delete_persistent_errors` and `recheck_errors_after_scan`. The matching
+"Settings:" list in this file was updated to stay in sync with the actual
+setting titles. No functional change -- only setting titles/help text and
+this doc.
+
+## Notes (1.2.20-beta)
+
+Fixed the GitHub URLs in package.json (`bugs`, `repository`): they
+pointed at a shared `sharefixxers/airdcpp-extensions` monorepo path
+that doesn't exist, instead of this extension's own dedicated
+repository. Now `https://github.com/sharefixxers/airdcpp-sfv-folder-checker`,
+matching every other extension in the family. No functional change.
+
+## Notes (1.2.19-beta)
+
+Editorial pass over this file: removed meta-commentary about how/why a
+change came about (phrasing like "requested directly"/"per request")
+from every changelog entry, keeping only what actually changed. No
+functional change.
+
+## Notes (1.2.18-beta)
+
+/sfvcheck (and the default folder setting) now accept multiple folders at
+once, comma-separated (`/sfvcheck folder1,folder2,folder3`), checked one
+after another.
+
+- All given folders are validated up front (must exist and be a real
+  directory) before any scanning starts -- one bad path in the list means
+  nothing gets scanned rather than only failing partway through.
+- One shared cache, concurrency setting and stop flag are used across the
+  whole sequence, so /sfvstop during a multi-folder run cancels the
+  sequence cleanly after the current folder's current file finishes,
+  instead of only stopping the folder in progress.
+- Each folder is still reported, logged and written to its own JSON
+  report exactly as a single /sfvcheck always was -- a folder failing
+  (e.g. missing mid-scan, permission error) is logged and skipped rather
+  than aborting the remaining folders in the list.
+- Single-folder behavior (/sfvcheck with one path, or a default folder
+  with no comma) is unchanged.
+
+## Notes (1.2.17-beta)
+
+Extended the 1.2.16-beta post-scan recheck (below) in two ways, right
+after seeing it run on the real EISDIR case:
+
+- The recheck can now try more than once: still-erroring files are
+  rechecked repeatedly, each attempt separated by the same configurable
+  pause, up to a new "Maximum number of recheck attempts before giving
+  up" setting (default 4 -- so, at default settings, up to a minute
+  total before giving up). Only files still failing are retried on each
+  attempt, so one that recovers early stops being touched.
+- A file that's still failing after every recheck attempt is now
+  treated the same as a confirmed CRC mismatch: deleted and its release
+  folder searched for again (new "Automatically delete files that still
+  fail with a read/CRC error" setting, on by default), counted alongside
+  CRC mismatches for the existing mass-deletion safety cap (so something
+  systemic still gets reported instead of deleted), and triggering the
+  same hash-database cleanup and redownload as a mismatch deletion.
+
+Verified standalone: a file that stays broken through every attempt is
+still reported/deleted correctly after the configured maximum, and one
+that recovers partway through stops the loop early instead of running
+out the remaining attempts.
+
+## Notes (1.2.16-beta)
+
+Added an optional post-scan recheck for files that end a scan with a
+read/CRC error (`Could not read file: ...` / `Could not calculate CRC:
+...`), on by default: after the whole scan finishes, any such files got
+one more check following a configurable pause (default 15 sec., "Seconds
+to wait before each recheck attempt" setting -- see 1.2.17-beta above
+for the repeated-attempts version this grew into). If the recheck
+succeeded the file was reported normally (ok/mismatch) instead of as an
+error; if it failed again, it was reported as an error exactly as
+before.
+
+Prompted by a real case: a release folder's `.r62` volume repeatedly
+failed with `EISDIR: illegal operation on a directory, read` while being
+read over a mapped network drive (`z:\...`), twice in a row, each time
+after the scan stalled on it for several minutes -- while the file
+itself, checked directly on disk right after, was a completely ordinary
+100 MB file identical to its sibling volumes. The existing stat/hash
+retry (3 attempts, ~300ms apart) is meant for a quick hiccup and isn't
+long enough for a stall like that; this recheck runs after the full
+scan, by which point a passing network glitch has usually cleared on
+its own. Can be turned off ("Recheck files that failed with a read/CRC
+error after the scan finishes") to go back to reporting a read/CRC
+error immediately after the initial retries.
+
 ## Notes (1.2.15-beta)
 
 Cosmetic-only pass, requested directly: every user-facing/prose mention of

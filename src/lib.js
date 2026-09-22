@@ -257,6 +257,9 @@
     const cache = options.cache || null;
     const forceFull = !!options.forceFull;
     const stopFlag = options.stopFlag || null;
+    const recheckErrors = !!options.recheckErrors;
+    const recheckDelayMs = options.recheckDelayMs > 0 ? options.recheckDelayMs : 15000;
+    const recheckMaxAttempts = options.recheckMaxAttempts > 0 ? options.recheckMaxAttempts : 4;
 
     const sfvFiles = await findSfvFiles(rootDir);
 
@@ -322,6 +325,62 @@
         },
         stopFlag
     );
+
+    if (recheckErrors && !(stopFlag && stopFlag.stopped)) {
+      let errorIndexes = [];
+      for (let i = 0; i < results.length; i++) {
+        if (results[i].status === 'error' && results[i].file) {
+          errorIndexes.push(i);
+        }
+      }
+
+      // Repeated recheck: as long as any of these files are still erroring,
+      // wait and try again, up to recheckMaxAttempts times total -- a single
+      // recheck isn't always enough for a longer stall (a network share can
+      // stay flaky for well over a minute), but each attempt only rechecks
+      // whatever is still failing, so a file that recovers early doesn't
+      // keep getting hit on every later attempt.
+      for (
+        let attempt = 1;
+        attempt <= recheckMaxAttempts && errorIndexes.length > 0 && !(stopFlag && stopFlag.stopped);
+        attempt++
+      ) {
+        if (options.onRecheckStart) {
+          try {
+            options.onRecheckStart(errorIndexes.length, recheckDelayMs, attempt, recheckMaxAttempts);
+          } catch (e) {
+
+          }
+        }
+
+        await delay(recheckDelayMs);
+
+        const stillFailing = [];
+        for (const idx of errorIndexes) {
+          if (stopFlag && stopFlag.stopped) break;
+          const prev = results[idx];
+          const item = {
+            sfv: prev.sfv,
+            file: prev.file,
+            expectedCrc: prev.expectedCrc
+          };
+          const recheckResult = [];
+          // forceFull: true -- ignore the cache for this one file, a previous
+          // error was never written to it anyway, but this also protects
+          // against a stale/partial entry some other code path might have left.
+          await hashOneItem(item, recheckResult, null, {
+            count: 0
+          }, 1, cache, true);
+          if (recheckResult.length > 0) {
+            results[idx] = recheckResult[0];
+            if (results[idx].status === 'error') {
+              stillFailing.push(idx);
+            }
+          }
+        }
+        errorIndexes = stillFailing;
+      }
+    }
 
     return {
       sfvFiles,

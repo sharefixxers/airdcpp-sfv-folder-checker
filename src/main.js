@@ -21,6 +21,7 @@
   const SettingDefinitions = [{
     key: 'default_directory',
     title: 'Folder to scan',
+    help: 'Comma-separate multiple folders to check with /sfvcheck.',
     default_value: '',
     type: 'string',
     optional: true,
@@ -33,29 +34,28 @@
     max: 32,
   }, {
     key: 'delete_mismatches',
-    title: 'Automatically delete files with a CRC mismatch',
+    title: 'Delete files with a CRC error',
     default_value: true,
     type: 'boolean',
   }, {
     key: 'max_auto_delete_count',
-    title: 'Skip automatic deletion if more than this many CRC mismatches are found in one scan (0 = no limit)',
-    help: 'Safety net against mass-deleting files after something like a dropped network mount.',
+    title: 'Skip deletion if more than this many CRC errors are found in one scan',
+    help: '0 = no limit. Safety net against mass-deleting files after something like a dropped network mount.',
     default_value: 50,
     type: 'number',
     min: 0,
     max: 100000,
   }, {
     key: 'max_auto_delete_percent',
-    title: 'Skip automatic deletion if more than this percentage of checked files mismatch (0 = no limit)',
-    help: 'Same safety net as the count limit above, expressed as a percentage of the files checked in this scan.',
+    title: 'Skip deletion if more than this percentage of CRC errors are found',
+    help: '0 = no limit. Same safety net as the count limit above, expressed as a percentage of the files checked in this scan.',
     default_value: 25,
     type: 'number',
     min: 0,
     max: 100,
   }, {
     key: 'delete_unparseable_sfv',
-    title: 'Automatically delete SFV files with no valid lines',
-    help: 'A broken SFV (empty, comments-only, or malformed) can\'t be checked -- deleting it lets a fresh, valid one be obtained on redownload.',
+    title: 'Delete SFV files with no valid lines and let a valid one be redownloaded.',
     default_value: true,
     type: 'boolean',
   }, {
@@ -73,7 +73,7 @@
     type: 'boolean',
   }, {
     key: 'redownload_on_delete',
-    title: 'Automatically re-search/redownload CRC mismatch and deleted files',
+    title: 'Automatically re-search/redownload CRC error and deleted files',
     default_value: true,
     type: 'boolean',
   }, {
@@ -97,12 +97,38 @@
     max: 3650,
   }, {
     key: 'report_max_age_days',
-    title: 'Clean up old scan report files after (days) (0 = never)',
-    help: 'This cleans up old report files so that folder doesn\'t grow forever.',
+    title: 'Clean up old scan report files after (days)',
+    help: '0 = never.',
     default_value: 90,
     type: 'number',
     min: 0,
     max: 3650,
+  }, {
+    key: 'delete_persistent_errors',
+    title: 'Automatically delete files that still fail with a read/CRC error.',
+    default_value: true,
+    type: 'boolean',
+  }, {
+    key: 'recheck_errors_after_scan',
+    title: 'Recheck files that failed with a read/CRC error after the scan finishes.',
+    help: 'To prevent immediate action (e.g. on a brief network share hiccup).',
+    default_value: true,
+    type: 'boolean',
+  }, {
+    key: 'recheck_delay_seconds',
+    title: 'Seconds to wait before each recheck attempt',
+    default_value: 15,
+    type: 'number',
+    min: 1,
+    max: 300,
+  }, {
+    key: 'recheck_max_attempts',
+    title: 'Maximum number of recheck attempts before giving up.',
+    help: 'Only files still failing are retried on each attempt, so one that recovers early stops being touched.',
+    default_value: 4,
+    type: 'number',
+    min: 1,
+    max: 20,
   }, ];
 
   async function loadCache(cachePath) {
@@ -412,72 +438,10 @@
     };
   }
 
-  async function handleSfvCheck(socket, extension, settings, scanState, redownloadQueue, type, entityId, args) {
-    const rawArgs = (args || []).slice();
-    let forceFull = false;
-    const fullIndex = rawArgs.findIndex((a) => (a || '').toLowerCase() === 'full');
-    if (fullIndex !== -1) {
-      forceFull = true;
-      rawArgs.splice(fullIndex, 1);
-    }
-
-    const givenPath = rawArgs.join(' ').trim();
-
-    if (givenPath.toLowerCase() === 'help') {
-      sendStatus(socket, type, entityId, SFV_HELP_TEXT);
-      return;
-    }
-
-    const defaultDirectory = (settings.getValue('default_directory') || '').trim();
-    const targetPath = givenPath || defaultDirectory;
-
-    if (!targetPath) {
-      sendStatus(
-        socket,
-        type,
-        entityId,
-        'Usage: /sfvcheck <full path to folder> [full], or set a default folder in the extension ' +
-        'settings first so /sfvcheck also works without a path.'
-      );
-      return;
-    }
-
-    if (scanState.current) {
-      sendStatus(
-        socket,
-        type,
-        entityId,
-        `A scan of "${scanState.current.targetPath}" is already running. Use /sfvstop to cancel it first.`
-      );
-      return;
-    }
-
-    let targetStat;
-    try {
-      targetStat = await fsp.stat(targetPath);
-    } catch (e) {
-      sendStatus(socket, type, entityId, `Folder not found: ${targetPath}`);
-      return;
-    }
-    if (!targetStat.isDirectory()) {
-      sendStatus(socket, type, entityId, `Folder not found: ${targetPath}`);
-      return;
-    }
-
-    const concurrency = settings.getValue('concurrency') || 4;
-    const useCache = settings.getValue('incremental_cache') !== false;
-    const cachePath = extension.configPath + 'sfv-cache.json';
-    const cache = useCache ? await loadCache(cachePath) : null;
-
-    const stopFlag = {
-      stopped: false
-    };
-    scanState.current = {
-      targetPath,
-      stopFlag,
-      startedAt: Date.now()
-    };
-
+  async function scanOneFolder(
+    socket, extension, settings, redownloadQueue, type, entityId,
+    targetPath, forceFull, stopFlag, concurrency, useCache, cache, cachePath
+  ) {
     const modeText = forceFull ? ', full, cache ignored' : useCache ? ', with cache' : '';
     sendStatus(socket, type, entityId, `Scanning "${targetPath}" (${concurrency} at a time${modeText})...`);
     logEvent(socket, `Starting scan of "${targetPath}" (${concurrency} files at a time${modeText}).`, 'info');
@@ -495,6 +459,9 @@
         cache,
         forceFull,
         stopFlag,
+        recheckErrors: settings.getValue('recheck_errors_after_scan') !== false,
+        recheckDelayMs: Math.max(1, Number(settings.getValue('recheck_delay_seconds')) || 15) * 1000,
+        recheckMaxAttempts: Math.max(1, Number(settings.getValue('recheck_max_attempts')) || 4),
         onProgress: (processed, total, item, fromCache) => {
           const now = Date.now();
           if (cache && now - lastCacheSave > 60000) {
@@ -513,6 +480,15 @@
             'info'
           );
         },
+        onRecheckStart: (count, delayMs, attempt, maxAttempts) => {
+          logEvent(
+            socket,
+            `${count} file(s) in "${targetPath}" still have a read/CRC error -- recheck attempt ${attempt}/` +
+              `${maxAttempts} after a ${Math.round(delayMs / 1000)}s pause in case it's a transient glitch ` +
+              `(e.g. a network share hiccup).`,
+            'info'
+          );
+        },
       });
 
       let prunedCount = 0;
@@ -528,26 +504,34 @@
       const cachedCount = results.filter((r) => r.fromCache).length;
 
       const deleteMismatches = !!settings.getValue('delete_mismatches');
+      const deletePersistentErrors = settings.getValue('delete_persistent_errors') !== false;
       const mismatches = problems.filter((p) => p.status === 'mismatch' && p.file);
+      // 'error' here means still failing after the retries (and, if enabled,
+      // the post-scan recheck) -- by this point it's had every reasonable
+      // chance to turn out to be a transient glitch, so it's treated the
+      // same as a confirmed CRC mismatch.
+      const persistentErrors = problems.filter((p) => p.status === 'error' && p.file);
+      const deletableCount = (deleteMismatches ? mismatches.length : 0) +
+        (deletePersistentErrors ? persistentErrors.length : 0);
 
       // Safety net: something systemic (a dropped network mount, a share
-      // moved mid-scan, ...) can make every file in a scan look corrupted at
-      // once -- auto-deleting all of those would do real damage. If the
-      // mismatch count (or its share of everything checked) crosses either
-      // configured limit, skip deletion entirely for this scan and just
-      // report it loudly instead.
+      // moved mid-scan, ...) can make every file in a scan look corrupted or
+      // unreadable at once -- auto-deleting all of those would do real
+      // damage. If the combined mismatch+error count (or its share of
+      // everything checked) crosses either configured limit, skip deletion
+      // entirely for this scan and just report it loudly instead.
       let deleteSkippedReason = null;
-      if (deleteMismatches && mismatches.length > 0) {
+      if (deletableCount > 0) {
         const maxCount = Number(settings.getValue('max_auto_delete_count')) || 0;
         const maxPercent = Number(settings.getValue('max_auto_delete_percent')) || 0;
-        const percentMismatched = results.length > 0 ? (mismatches.length / results.length) * 100 : 0;
+        const percentDeletable = results.length > 0 ? (deletableCount / results.length) * 100 : 0;
 
-        if (maxCount > 0 && mismatches.length > maxCount) {
+        if (maxCount > 0 && deletableCount > maxCount) {
           deleteSkippedReason =
-            `${mismatches.length} CRC mismatches found, more than the configured limit of ${maxCount}`;
-        } else if (maxPercent > 0 && percentMismatched > maxPercent) {
+            `${deletableCount} mismatch/error file(s) found, more than the configured limit of ${maxCount}`;
+        } else if (maxPercent > 0 && percentDeletable > maxPercent) {
           deleteSkippedReason =
-            `${mismatches.length} CRC mismatches found (${percentMismatched.toFixed(1)}% of ${results.length} ` +
+            `${deletableCount} mismatch/error file(s) found (${percentDeletable.toFixed(1)}% of ${results.length} ` +
             `checked), more than the configured limit of ${maxPercent}%`;
         }
       }
@@ -557,7 +541,7 @@
           socket,
           `Automatic deletion skipped: ${deleteSkippedReason} -- looks more like a systemic problem (e.g. a ` +
             `dropped network mount) than real corruption. Check the report and delete manually if the ` +
-            `mismatches turn out to be real.`,
+            `mismatches/errors turn out to be real.`,
           'warning'
         );
       }
@@ -570,6 +554,23 @@
             p.deleted = true;
             deletedCount++;
             logEvent(socket, `Deleted (CRC mismatch): ${p.file} (sfv: ${p.sfv})`, 'warning');
+            redownloadQueue.enqueue(path.dirname(p.file));
+          } catch (e) {
+            p.deleted = false;
+            p.deleteError = e.message;
+            logEvent(socket, `Could not delete ${p.file}: ${e.message}`, 'error');
+          }
+        }
+      }
+
+      let deletedErrorCount = 0;
+      if (deletePersistentErrors && !deleteSkippedReason) {
+        for (const p of persistentErrors) {
+          try {
+            await fsp.unlink(p.file);
+            p.deleted = true;
+            deletedErrorCount++;
+            logEvent(socket, `Deleted (still failing -- ${p.message}): ${p.file} (sfv: ${p.sfv})`, 'warning');
             redownloadQueue.enqueue(path.dirname(p.file));
           } catch (e) {
             p.deleted = false;
@@ -599,7 +600,8 @@
       }
 
       let hashDbOptimizeTriggered = false;
-      if (deletedCount > 0 && settings.getValue('optimize_hash_db') !== false) {
+      const totalDeletedCount = deletedCount + deletedErrorCount;
+      if (totalDeletedCount > 0 && settings.getValue('optimize_hash_db') !== false) {
         try {
           await socket.post('hash/optimize_database', {
             verify: false
@@ -607,7 +609,7 @@
           hashDbOptimizeTriggered = true;
           logEvent(
             socket,
-            `Hash database cleanup started (${deletedCount} file(s) just deleted in this scan).`,
+            `Hash database cleanup started (${totalDeletedCount} file(s) just deleted in this scan).`,
             'info'
           );
         } catch (e) {
@@ -630,6 +632,7 @@
         (cachedCount ? ` (${cachedCount} from cache, ${results.length - cachedCount} actually hashed)` : '') +
         `, ${problems.length} problem(s)` +
         (deleteMismatches ? `, ${deletedCount} file(s) deleted (CRC mismatch)` : '') +
+        (deletePersistentErrors ? `, ${deletedErrorCount} file(s) deleted (still failing)` : '') +
         (deleteSkippedReason ? `, deletion skipped (see log)` : '') +
         (deleteUnparseable ? `, ${deletedSfvCount} broken sfv file(s) deleted` : '') +
         (prunedCount ? `, ${prunedCount} orphaned cache entrie(s) cleaned up` : '') +
@@ -649,7 +652,7 @@
         } else if (p.status === 'unparseable') {
           line = `${p.sfv}: ${p.message}${p.deleted ? ' [deleted]' : ''}`;
         } else {
-          line = `${p.file || p.sfv}: ${p.message} (sfv: ${p.sfv})`;
+          line = `${p.file || p.sfv}: ${p.message} (sfv: ${p.sfv})${p.deleted ? ' [deleted]' : ''}`;
         }
         logEvent(socket, line, 'warning');
       }
@@ -658,6 +661,109 @@
       logEvent(socket, `Scan of "${targetPath}" failed: ${e.message}`, 'error');
       if (cache) {
         await saveCache(cachePath, cache);
+      }
+    }
+  }
+
+  async function handleSfvCheck(socket, extension, settings, scanState, redownloadQueue, type, entityId, args) {
+    const rawArgs = (args || []).slice();
+    let forceFull = false;
+    const fullIndex = rawArgs.findIndex((a) => (a || '').toLowerCase() === 'full');
+    if (fullIndex !== -1) {
+      forceFull = true;
+      rawArgs.splice(fullIndex, 1);
+    }
+
+    const givenPath = rawArgs.join(' ').trim();
+
+    if (givenPath.toLowerCase() === 'help') {
+      sendStatus(socket, type, entityId, SFV_HELP_TEXT);
+      return;
+    }
+
+    const defaultDirectory = (settings.getValue('default_directory') || '').trim();
+    const rawTargetSpec = givenPath || defaultDirectory;
+
+    if (!rawTargetSpec) {
+      sendStatus(
+        socket,
+        type,
+        entityId,
+        'Usage: /sfvcheck <folder>[,<folder2>,...] [full], or set a default folder (or comma-separated ' +
+        'folders) in the extension settings first so /sfvcheck also works without a path.'
+      );
+      return;
+    }
+
+    const targetPaths = rawTargetSpec.split(',').map((p) => p.trim()).filter(Boolean);
+
+    if (!targetPaths.length) {
+      sendStatus(
+        socket,
+        type,
+        entityId,
+        'Usage: /sfvcheck <folder>[,<folder2>,...] [full], or set a default folder (or comma-separated ' +
+        'folders) in the extension settings first so /sfvcheck also works without a path.'
+      );
+      return;
+    }
+
+    if (scanState.current) {
+      sendStatus(
+        socket,
+        type,
+        entityId,
+        `A scan of "${scanState.current.targetPath}" is already running. Use /sfvstop to cancel it first.`
+      );
+      return;
+    }
+
+    for (const p of targetPaths) {
+      let stat;
+      try {
+        stat = await fsp.stat(p);
+      } catch (e) {
+        sendStatus(socket, type, entityId, `Folder not found: ${p}`);
+        return;
+      }
+      if (!stat.isDirectory()) {
+        sendStatus(socket, type, entityId, `Folder not found: ${p}`);
+        return;
+      }
+    }
+
+    const concurrency = settings.getValue('concurrency') || 4;
+    const useCache = settings.getValue('incremental_cache') !== false;
+    const cachePath = extension.configPath + 'sfv-cache.json';
+    const cache = useCache ? await loadCache(cachePath) : null;
+
+    const stopFlag = {
+      stopped: false
+    };
+    scanState.current = {
+      targetPath: targetPaths[0],
+      stopFlag,
+      startedAt: Date.now()
+    };
+
+    if (targetPaths.length > 1) {
+      logEvent(socket, `Scanning ${targetPaths.length} folders in sequence: ${targetPaths.join(', ')}.`, 'info');
+    }
+
+    try {
+      for (let i = 0; i < targetPaths.length; i++) {
+        if (stopFlag.stopped) {
+          break;
+        }
+        const targetPath = targetPaths[i];
+        scanState.current.targetPath = targetPath;
+        if (targetPaths.length > 1) {
+          logEvent(socket, `Folder ${i + 1}/${targetPaths.length}: "${targetPath}".`, 'info');
+        }
+        await scanOneFolder(
+          socket, extension, settings, redownloadQueue, type, entityId,
+          targetPath, forceFull, stopFlag, concurrency, useCache, cache, cachePath
+        );
       }
     } finally {
       scanState.current = null;
@@ -678,10 +784,11 @@
   const SFV_HELP_TEXT = `
 SFV/CRC check commands
 
-/sfvcheck - Check the default folder from the extension settings (if one is set)
+/sfvcheck - Check the default folder(s) from the extension settings (if set)
 /sfvcheck <path> - Check only that folder (real disk path, not the share name)
+/sfvcheck <path1>,<path2>,... - Check several folders one after another (comma-separated)
 /sfvcheck <path> full - Same, but ignore the cache and re-hash everything
-/sfvstop - Cancel a running scan
+/sfvstop - Cancel a running scan (including a multi-folder run)
 
 Concurrency, cache on/off, and automatic deletion of CRC mismatches can be set in this extension's Settings tab.`;
 
