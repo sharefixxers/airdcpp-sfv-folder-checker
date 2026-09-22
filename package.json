@@ -1,6 +1,6 @@
 {
   "name": "airdcpp-sfv-folder-checker",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "Hub command /sfvcheck <folder> that recursively checks a folder for .sfv files and compares their CRC32 against the real files on disk. Works together with airdcpp-release-fixxer.",
   "main": "dist/main.js",
   "license": "MIT",

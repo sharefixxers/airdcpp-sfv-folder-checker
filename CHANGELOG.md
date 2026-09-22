@@ -1,4 +1,4 @@
-## Notes (1.0.0)
+## Notes (1.3.0)
 
 No longer beta: version reset to 1.0.0 to mark the extension stable,
 following semantic versioning convention (the 0.x/`-beta` range signals
